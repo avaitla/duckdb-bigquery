@@ -1162,8 +1162,13 @@ google::cloud::bigquery::v2::QueryResponse BigqueryClient::ExecuteQuery(const st
     auto complete = response->job_complete().value();
     if (!complete) {
         if (response->has_job_reference()) {
-            auto job_id = response->job_reference().job_id();
-            throw BinderException("Query execution exceeded the timeout. Job ID: " + job_id);
+            const auto &job_ref = response->job_reference();
+            WaitForJobCompletionWithDeadline(job_ref);
+            auto results = GetQueryResults(job_ref);
+            response->mutable_job_complete()->set_value(true);
+            response->mutable_rows()->Swap(results.mutable_rows());
+            response->set_page_token(results.page_token());
+            return *response;
         }
         throw BinderException("Query execution exceeded the timeout.");
     }
@@ -1408,6 +1413,29 @@ google::cloud::bigquery::v2::Job BigqueryClient::WaitForJobCompletion(
                 ThrowOnJobStatusError(job.status(), "Load job");
             }
             return job;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+}
+
+google::cloud::bigquery::v2::Job BigqueryClient::WaitForJobCompletionWithDeadline(
+    const google::cloud::bigquery::v2::JobReference &job_ref) {
+    if (job_ref.job_id().empty()) {
+        throw BinderException("Load job reference did not contain a job ID");
+    }
+
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(BigquerySettings::QueryTimeoutMs());
+    while (true) {
+        auto job = GetJobByReference(job_ref);
+        if (!job.has_status() || job.status().state() == "DONE") {
+            if (job.has_status()) {
+                ThrowOnJobStatusError(job.status(), "Load job");
+            }
+            return job;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            throw BinderException("BigQuery job exceeded the timeout. Job ID: " + job_ref.job_id());
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }

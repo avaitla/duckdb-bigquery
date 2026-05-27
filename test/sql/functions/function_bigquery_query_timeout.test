@@ -1,0 +1,41 @@
+# name: test/sql/functions/function_bigquery_query_timeout.test
+# description: bq_query_timeout_ms is honored as an overall deadline. jobs.query
+#              only blocks for ~200s and then returns job_complete=false while
+#              the job keeps running; the client polls the job until it finishes
+#              or this deadline is reached. A query that cannot finish within the
+#              budget fails promptly with a timeout error instead of blocking
+#              forever or for BigQuery's full ~200s synchronous window.
+# group: [functions]
+
+require bigquery
+
+require-env BQ_TEST_PROJECT
+
+# Minimal budget: jobs.query returns job_complete=false for any non-trivial
+# query and the deadline is immediately exceeded, so the client must surface a
+# timeout (rather than hang). BigQuery has no SLEEP(), so we use a large cross
+# join of generated arrays: pure compute that scans zero bytes but cannot finish
+# within the budget. The RAND() predicate (always true) is non-deterministic so
+# BigQuery cannot serve a cached result and must actually run the job.
+statement ok
+SET bq_query_timeout_ms = 1;
+
+statement error
+SELECT n FROM bigquery_query('${BQ_TEST_PROJECT}', 'SELECT COUNT(*) AS n FROM UNNEST(GENERATE_ARRAY(1, 1000000)) a, UNNEST(GENERATE_ARRAY(1, 1000)) b WHERE RAND() < 2');
+----
+<REGEX>:.*exceeded the timeout.*
+
+statement ok
+SET bq_query_timeout_ms = 90000;
+
+# With a normal budget the same shape of query completes and returns its result.
+query I
+SELECT n FROM bigquery_query('${BQ_TEST_PROJECT}', 'SELECT COUNT(*) AS n FROM UNNEST(GENERATE_ARRAY(1, 1000)) a, UNNEST(GENERATE_ARRAY(1, 1000)) b');
+----
+1000000
+
+# A genuine query error is surfaced as itself, not as a timeout.
+statement error
+SELECT * FROM bigquery_query('${BQ_TEST_PROJECT}', 'SELECT * FROM this_table_does_not_exist_xyz');
+----
+<REGEX>:.*(not found|does not exist|Not found).*
