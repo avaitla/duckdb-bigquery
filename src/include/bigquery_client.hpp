@@ -169,6 +169,8 @@ private:
         const string &location,
         const std::map<string, string> &labels);
     google::cloud::bigquery::v2::Job WaitForJobCompletion(const google::cloud::bigquery::v2::JobReference &job_ref);
+    google::cloud::bigquery::v2::Job WaitForJobCompletionWithDeadline(
+        const google::cloud::bigquery::v2::JobReference &job_ref);
     void ThrowOnJobStatusError(const google::cloud::bigquery::v2::JobStatus &status, const string &operation_name);
 
     void MapTableSchema(const google::cloud::bigquery::v2::TableSchema &schema,
